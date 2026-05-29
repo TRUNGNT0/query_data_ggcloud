@@ -83,13 +83,37 @@ if 'bigquery_error' not in st.session_state:
     st.session_state.bigquery_error = None
 
 # ========== HELPER FUNCTIONS ==========
+STOPWORDS = {
+    'và', 'của', 'trong', 'với', 'là', 'các', 'cho', 'trên', 'tại', 'về',
+    'những', 'đó', 'một', 'nhiều', 'giữa', 'bị', 'đã', 'có', 'từ', 'the'
+}
+
+
 def normalize_keywords(keywords):
     if isinstance(keywords, list):
-        return [str(k).strip().lower().replace('_', ' ') for k in keywords if k]
-    if isinstance(keywords, str):
-        tokens = re.split(r'[;,\s]+', keywords)
-        return [t.strip().lower().replace('_', ' ') for t in tokens if t]
-    return []
+        candidates = [str(k) for k in keywords if k]
+    elif isinstance(keywords, str):
+        candidates = []
+        for chunk in re.split(r'[;/]+', keywords):
+            candidates.extend(re.split(r'[,]+', chunk))
+    else:
+        return []
+
+    normalized = []
+    for item in candidates:
+        item_text = str(item).strip()
+        if not item_text:
+            continue
+        item_text = re.sub(r'["\'\(\)\[\]\\/]+', ' ', item_text)
+        item_text = re.sub(r'\s+', ' ', item_text).strip().lower()
+        words = [w for w in re.split(r'\s+', item_text) if w and w not in STOPWORDS]
+        if not words:
+            continue
+        if len(words) >= 2:
+            normalized.append(' '.join(words))
+        elif len(words) == 1 and len(words[0]) >= 4:
+            normalized.append(words[0])
+    return normalized
 
 
 def get_keyword_counts(df, top_n=40):
