@@ -380,14 +380,58 @@ with kw_col3:
 
 # ========== EVENT DETECTION ==========
 st.markdown('## Event Detection')
-event_cols = st.columns(len(trending_events) or 1)
-for idx, event in enumerate(trending_events):
-    with event_cols[idx]:
-        st.markdown(f"### {event['name']}")
-        st.markdown(f"**Keywords chính:** {event['keywords']}")
-        st.markdown(f"**Số bài liên quan:** {event['count']}")
-        st.markdown(f"**Mức độ bùng nổ:** {event['burst']}%")
-        st.progress(min(event['burst'], 100))
+if trending_events:
+    event_summary = pd.DataFrame(trending_events)
+    event_summary['status'] = event_summary['burst'].apply(
+        lambda x: 'Hot' if x >= 70 else ('Trending' if x >= 40 else 'Emerging')
+    )
+    event_summary['score'] = event_summary['burst']
+
+    fig_event_trend = px.bar(
+        event_summary,
+        x='name',
+        y='score',
+        color='status',
+        color_discrete_map={'Hot': '#f97316', 'Trending': '#38bdf8', 'Emerging': '#34d399'},
+        title='Sự kiện hot / trending',
+        labels={'name': 'Event', 'score': 'Burst score (%)'},
+        template='plotly_dark'
+    )
+    fig_event_trend.update_layout(height=380, margin=dict(t=40, b=40, l=0, r=0), xaxis_tickangle=-20)
+    st.plotly_chart(fig_event_trend, use_container_width=True)
+
+    event_cols = st.columns(len(trending_events))
+    for idx, event in enumerate(trending_events):
+        with event_cols[idx]:
+            st.markdown(f"### {event['name']}")
+            st.markdown(f"**Keywords chính:** {event['keywords']}")
+            st.markdown(f"**Số bài liên quan:** {event['count']}")
+            st.markdown(f"**Mức độ bùng nổ:** {event['burst']}%")
+            st.progress(min(event['burst'], 100))
+            st.markdown(f"**Trạng thái:** {event_summary.loc[idx, 'status']}")
+
+    if 'published_date' in df.columns:
+        trend_rows = []
+        for event in trending_events:
+            mask = df['keywords'].astype(str).str.contains(event['name'], case=False, na=False)
+            counts = df[mask].groupby('published_date').size().reset_index(name='count')
+            counts['event'] = event['name']
+            trend_rows.append(counts)
+        if trend_rows:
+            event_trends = pd.concat(trend_rows, ignore_index=True)
+            fig_event_time = px.line(
+                event_trends,
+                x='published_date',
+                y='count',
+                color='event',
+                markers=True,
+                title='Xu hướng theo ngày của sự kiện',
+                template='plotly_dark'
+            )
+            fig_event_time.update_layout(height=420, margin=dict(t=40, b=40, l=0, r=0))
+            st.plotly_chart(fig_event_time, use_container_width=True)
+else:
+    st.info('Chưa có sự kiện trending để hiển thị.')
 
 # ========== TOPIC MODELING ==========
 st.markdown('## Topic Modeling')
