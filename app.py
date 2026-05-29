@@ -382,7 +382,7 @@ with kw_col1:
         if phrase_counts:
             top_phrases = phrase_counts.most_common(20)
             # Hiển thị các cụm từ duy nhất dưới dạng tags
-            kw_text = ', '.join([f"**{ph}** ({cnt})" for ph, cnt in top_phrases[:15]])
+            kw_text = ', '.join([f"**{ph}** ({cnt})" for ph, cnt in top_phrases[:3]])
             st.markdown(f"**Cụm từ nổi bật:** {kw_text}")
             
             # Biểu đồ bar nhỏ hơn
