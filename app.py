@@ -47,6 +47,8 @@ if 'df_cache' not in st.session_state:
     st.session_state.df_cache = None
 if 'last_refresh' not in st.session_state:
     st.session_state.last_refresh = None
+if 'bigquery_error' not in st.session_state:
+    st.session_state.bigquery_error = None
 
 # ========== ĐỌC DỮ LIỆU TỪ BIGQUERY ==========
 @st.cache_data(ttl=3600)
@@ -71,9 +73,10 @@ def load_data_from_bigquery():
         """
         df = client.query(query).to_dataframe()
         df['published_date'] = pd.to_datetime(df['published_date']).dt.date
+        st.session_state.bigquery_error = None
         return df
     except Exception as e:
-        st.error(f"❌ Lỗi kết nối BigQuery: {e}")
+        st.session_state.bigquery_error = str(e)
         return None
 
 @st.cache_data(ttl=3600)
@@ -91,17 +94,41 @@ def load_sample_data():
     return pd.DataFrame(data)
 
 # ========== LOAD DỮ LIỆU ==========
-st.session_state.df_cache = load_data_from_bigquery()
-if st.session_state.df_cache is None:
-    st.session_state.df_cache = load_sample_data()
+uploaded_file = st.sidebar.file_uploader("Tải lên file dữ liệu CSV/JSON", type=['csv', 'json'])
+use_local_sample = False
 
-df = st.session_state.df_cache
+if uploaded_file is not None:
+    try:
+        if uploaded_file.type == 'application/json':
+            df = pd.read_json(uploaded_file)
+        else:
+            df = pd.read_csv(uploaded_file)
+        df['published_date'] = pd.to_datetime(df['published_date']).dt.date
+        st.sidebar.success("✅ Đã tải dữ liệu từ file thành công.")
+    except Exception as e:
+        st.sidebar.error(f"❌ Không đọc được file: {e}")
+        df = load_sample_data()
+        use_local_sample = True
+else:
+    st.session_state.df_cache = load_data_from_bigquery()
+    if st.session_state.df_cache is None:
+        df = load_sample_data()
+        use_local_sample = True
+    else:
+        df = st.session_state.df_cache
+
+if st.session_state.bigquery_error:
+    st.warning(
+        "⚠️ Không thể kết nối BigQuery. Ứng dụng sẽ dùng dữ liệu mẫu hoặc bạn có thể tải file dữ liệu CSV/JSON.")
+    st.info(st.session_state.bigquery_error)
 
 # ========== HEADER ==========
 col1, col2 = st.columns([0.8, 0.2])
 with col1:
     st.title("📊 News Analytics Dashboard")
     st.markdown("Trực quan dữ liệu tin tức - Tương tự Google Report")
+    if use_local_sample:
+        st.info("Dữ liệu hiện tại là dữ liệu mẫu vì không thể truy cập BigQuery.")
 
 with col2:
     if st.button("🔄 Làm mới", key="refresh_btn"):
