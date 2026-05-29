@@ -22,50 +22,22 @@ st.set_page_config(
 # ========== CSS ĐẶC BIỆT ==========
 st.markdown("""
     <style>
-        :root {
-            color-scheme: dark;
-        }
-        body {
-            background-color: #061a26;
-            color: #e8f8ff;
-        }
+        :root { color-scheme: dark; }
+        body { background-color: #061a26; color: #e8f8ff; }
         .stApp {
             background: linear-gradient(135deg, #02111b 0%, #062836 50%, #051d2c 100%);
             color: #eef8ff;
         }
-        .css-18e3th9 {
-            background-color: transparent;
-        }
-        .css-1d391kg {
-            background-color: rgba(3, 29, 44, 0.82);
-        }
-        .stButton>button {
-            background-color: #0fb5ff;
-            color: white;
-            border: none;
-        }
-        .stButton>button:hover {
-            background-color: #24c5ff;
-            color: white;
-        }
-        .st-b8 {
-            background: rgba(255,255,255,0.05);
-        }
-        .block-container {
-            padding: 1.2rem 1.5rem 0 1.5rem;
-        }
-        .reportview-container .main .block-container {
-            padding-top: 1rem;
-        }
-        .css-1aumxhk {
-            background: rgba(4, 29, 45, 0.7);
-        }
-        .stSidebar {
-            background-color: #031519;
-        }
-        .stMarkdown h1, .stMarkdown h2, .stMarkdown h3, .stMarkdown h4 {
-            color: #d3f9ff;
-        }
+        .css-18e3th9 { background-color: transparent; }
+        .css-1d391kg { background-color: rgba(3, 29, 44, 0.82); }
+        .stButton>button { background-color: #0fb5ff; color: white; border: none; }
+        .stButton>button:hover { background-color: #24c5ff; color: white; }
+        .st-b8 { background: rgba(255,255,255,0.05); }
+        .block-container { padding: 1.2rem 1.5rem 0 1.5rem; }
+        .reportview-container .main .block-container { padding-top: 1rem; }
+        .css-1aumxhk { background: rgba(4, 29, 45, 0.7); }
+        .stSidebar { background-color: #031519; }
+        .stMarkdown h1, .stMarkdown h2, .stMarkdown h3, .stMarkdown h4 { color: #d3f9ff; }
         .stMetric {
             background: rgba(6, 29, 46, 0.85);
             border: 1px solid rgba(15, 181, 255, 0.25);
@@ -85,11 +57,19 @@ if 'bigquery_error' not in st.session_state:
 # ========== HELPER FUNCTIONS ==========
 STOPWORDS = {
     'và', 'của', 'trong', 'với', 'là', 'các', 'cho', 'trên', 'tại', 'về',
-    'những', 'đó', 'một', 'nhiều', 'giữa', 'bị', 'đã', 'có', 'từ', 'the'
+    'những', 'đó', 'một', 'nhiều', 'giữa', 'bị', 'đã', 'có', 'từ', 'the',
+    'this', 'that', 'theo', 'khi', 'vào', 'sau', 'được', 'không', 'còn',
+    'đây', 'như', 'hay', 'lên', 'ra', 'đến', 'nên', 'vì', 'rằng'
 }
 
 
 def normalize_keywords(keywords):
+    """
+    FIX: Điều chỉnh lại để chấp nhận cụm 2-3 từ là mặc định.
+    - Bỏ điều kiện `2 <= len(w) <= 5` (đây là check ký tự sai)
+    - Giữ từ có ít nhất 2 ký tự thay vì 2-5 ký tự
+    - Ưu tiên cụm 2-3 từ, vẫn giữ từ đơn nếu dài >= 3 ký tự
+    """
     if isinstance(keywords, list):
         candidates = [str(k) for k in keywords if k]
     elif isinstance(keywords, str):
@@ -104,18 +84,27 @@ def normalize_keywords(keywords):
         item_text = str(item).strip()
         if not item_text:
             continue
+        # Loại bỏ ký tự đặc biệt
         item_text = re.sub(r'["\'\(\)\[\]\\/]+', ' ', item_text)
         item_text = re.sub(r'\s+', ' ', item_text).strip().lower()
-        words = [w for w in re.split(r'\s+', item_text) if w and w not in STOPWORDS]
-        if not words:
-            continue
-        filtered_words = [w for w in words if 2 <= len(w) <= 5]
+
+        # Tách từ và lọc stopwords
+        words = [w for w in re.split(r'\s+', item_text) if w]
+        # FIX: Chỉ lọc stopwords, giữ mọi từ có >= 2 ký tự (không giới hạn 5 ký tự)
+        filtered_words = [w for w in words if w not in STOPWORDS and len(w) >= 2]
+
         if not filtered_words:
             continue
-        if len(filtered_words) >= 2:
-            normalized.append(' '.join(filtered_words))
-        elif len(filtered_words) == 1:
-            normalized.append(filtered_words[0])
+
+        word_count = len(filtered_words)
+        if word_count >= 2:
+            # FIX: Ưu tiên cụm 2-3 từ; nếu dài hơn thì lấy 3 từ đầu
+            normalized.append(' '.join(filtered_words[:3]))
+        else:
+            # Từ đơn: chỉ giữ nếu đủ dài (>= 3 ký tự) để tránh nhiễu
+            if len(filtered_words[0]) >= 3:
+                normalized.append(filtered_words[0])
+
     return normalized
 
 
@@ -213,10 +202,10 @@ def prepare_topic_tree(df):
                 rows.append({'category': category, 'keyword': kw.title(), 'count': count})
     return pd.DataFrame(rows)
 
+
 # ========== ĐỌC DỮ LIỆU TỪ BIGQUERY ==========
 @st.cache_data(ttl=3600)
 def load_data_from_bigquery():
-    """Tải dữ liệu từ BigQuery"""
     try:
         client = bigquery.Client()
         query = """
@@ -233,7 +222,6 @@ def load_data_from_bigquery():
         """
         df = client.query(query).to_dataframe()
         df['published_date'] = pd.to_datetime(df['published_date']).dt.date
-        # Convert clean_keywords array to comma-separated string
         df['keywords'] = df['clean_keywords'].apply(
             lambda x: ', '.join(x) if isinstance(x, list) else str(x)
         )
@@ -243,44 +231,76 @@ def load_data_from_bigquery():
         st.session_state.bigquery_error = str(e)
         return None
 
+
 @st.cache_data(ttl=3600)
 def load_sample_data():
-    """Tải dữ liệu mẫu nếu không có kết nối BigQuery"""
+    """Dữ liệu mẫu mở rộng để test đủ keyword"""
     data = {
         'title': [
             'Quy định mới phủ bóng lên giấc mơ thẻ xanh Mỹ',
             'Những nhà hàng đặc sản Texas lao đao vì giá thịt tăng phi mã',
             'Sát thủ bóng đêm của Hezbollah khiến Israel lo ngại',
             'Ukraine sẽ mua 20 tiêm kích Gripen hiện đại nhất của Thụy Điển',
-            'Tổng Bí thư, Chủ tịch nước Tô Lâm hội kiến Nhà Vua Thái Lan'
+            'Tổng Bí thư, Chủ tịch nước Tô Lâm hội kiến Nhà Vua Thái Lan',
+            'Xung đột Gaza leo thang sau các cuộc không kích mới',
+            'Mỹ áp thêm lệnh trừng phạt lên Nga vì vấn đề Ukraine',
+            'Hàn Quốc và Nhật Bản tăng cường hợp tác quân sự',
+            'Trung Quốc phản đối các tuyên bố chủ quyền Biển Đông',
+            'EU thảo luận gói viện trợ mới cho Ukraine',
+            'NATO họp bàn về chiến lược phòng thủ năm 2025',
+            'Lũ lụt nghiêm trọng tàn phá miền Trung châu Âu',
+            'Khủng hoảng di cư tại biên giới Hy Lạp và Thổ Nhĩ Kỳ',
+            'Israel mở chiến dịch quân sự tại miền Nam Gaza',
+            'Nga tấn công cơ sở hạ tầng năng lượng Ukraine',
         ],
-        'category': ['Thế giới', 'Thế giới', 'Thế giới', 'Thế giới', 'Thế giới'],
+        'category': [
+            'Chính trị', 'Kinh tế', 'Xung đột', 'Quân sự', 'Ngoại giao',
+            'Xung đột', 'Chính trị', 'Quân sự', 'Ngoại giao', 'Chính trị',
+            'Quân sự', 'Thiên tai', 'Di cư', 'Xung đột', 'Xung đột'
+        ],
         'published_date': [
-            (datetime.now() - timedelta(days=i)).date() for i in range(5)
+            (datetime.now() - timedelta(days=i % 10)).date() for i in range(15)
         ],
         'keywords': [
-            'Quy định, Mỹ, Thẻ xanh',
-            'Texas, Nhà hàng, Giá thịt',
-            'Hezbollah, Israel, Drone',
-            'Ukraine, Gripen, Thụy Điển',
-            'Tô Lâm, Thái Lan, Hội kiến'
+            'Quy định mới, Mỹ, Thẻ xanh, Nhập cư',
+            'Texas, Nhà hàng đặc sản, Giá thịt, Lạm phát',
+            'Hezbollah, Israel, Drone chiến đấu, Tấn công',
+            'Ukraine, Gripen, Thụy Điển, Hợp đồng quân sự',
+            'Tô Lâm, Thái Lan, Hội kiến, Ngoại giao',
+            'Gaza, Không kích, Xung đột leo thang, Israel',
+            'Trừng phạt Nga, Mỹ, Lệnh trừng phạt, Ukraine',
+            'Hàn Quốc, Nhật Bản, Hợp tác quân sự, Liên minh',
+            'Trung Quốc, Biển Đông, Chủ quyền, Tranh chấp',
+            'EU, Viện trợ Ukraine, Gói hỗ trợ, Châu Âu',
+            'NATO, Chiến lược phòng thủ, Hội nghị, Liên minh',
+            'Lũ lụt, Châu Âu, Thiệt hại, Khẩn cấp',
+            'Di cư, Hy Lạp, Thổ Nhĩ Kỳ, Biên giới',
+            'Israel, Gaza, Chiến dịch quân sự, Xung đột',
+            'Nga, Ukraine, Cơ sở hạ tầng, Tấn công tên lửa',
         ],
         'description': [
             'Thay đổi mới trong quy định xin thẻ xanh của Mỹ khiến người nhập cư lo ngại.',
-            'Những nhà hàng nổi tiếng ở Texas đang phải vật lộn vì giá nguyên liệu tăng.',
-            'Quan chức Israel ví drone của Hezbollah như cơn ác mộng.',
-            'Ukraine dự kiến đặt mua 20 tiêm kích Gripen của Thụy Điển.',
-            'Tổng Bí thư hội kiến Nhà Vua Thái Lan trong khuôn khổ chuyến thăm.'
+            'Những nhà hàng nổi tiếng ở Texas đang phải vật lộn vì giá nguyên liệu tăng cao.',
+            'Quan chức Israel ví drone của Hezbollah như cơn ác mộng với quân đội.',
+            'Ukraine dự kiến đặt mua 20 tiêm kích Gripen hiện đại của Thụy Điển.',
+            'Tổng Bí thư hội kiến Nhà Vua Thái Lan trong khuôn khổ chuyến thăm cấp nhà nước.',
+            'Các cuộc không kích mới tại Gaza khiến xung đột leo thang nghiêm trọng.',
+            'Washington mở rộng lệnh trừng phạt nhằm vào các thực thể tài chính Nga.',
+            'Seoul và Tokyo tăng cường phối hợp trong bối cảnh căng thẳng khu vực.',
+            'Bắc Kinh phản đối mạnh mẽ các tuyên bố chủ quyền Biển Đông từ các bên.',
+            'Liên minh châu Âu xem xét gói hỗ trợ tài chính và quân sự mới cho Ukraine.',
+            'Các bộ trưởng quốc phòng NATO thảo luận chiến lược ứng phó các mối đe dọa mới.',
+            'Trận lũ lịch sử tàn phá nhiều quốc gia miền Trung châu Âu, hàng nghìn người sơ tán.',
+            'Dòng người di cư tại biên giới Hy Lạp - Thổ Nhĩ Kỳ tạo ra khủng hoảng nhân đạo.',
+            'Lực lượng Israel mở rộng hoạt động quân sự tại miền Nam dải Gaza.',
+            'Tên lửa Nga tấn công nhiều cơ sở điện và năng lượng tại miền Đông Ukraine.',
         ],
         'link': [
-            'https://vnexpress.net/quy-dinh-moi-1.html',
-            'https://vnexpress.net/nha-hang-texas-2.html',
-            'https://vnexpress.net/hezbollah-3.html',
-            'https://vnexpress.net/ukraine-gripen-4.html',
-            'https://vnexpress.net/to-lam-thai-lan-5.html'
+            f'https://vnexpress.net/bai-viet-{i}.html' for i in range(1, 16)
         ]
     }
     return pd.DataFrame(data)
+
 
 # ========== LOAD DỮ LIỆU ==========
 source_options = ['BigQuery', 'Mẫu nội bộ', 'Upload JSON/CSV']
@@ -327,7 +347,7 @@ if 'published_date' in df.columns:
     df['published_date'] = pd.to_datetime(df['published_date']).dt.date
 
 if st.session_state.bigquery_error:
-    st.warning('⚠️ Không thể kết nối BigQuery. Ứng dụng sẽ dùng dữ liệu mẫu hoặc bạn có thể tải file dữ liệu CSV/JSON.')
+    st.warning('⚠️ Không thể kết nối BigQuery. Ứng dụng sẽ dùng dữ liệu mẫu hoặc bạn có thể tải file CSV/JSON.')
     st.info(st.session_state.bigquery_error)
 
 st.sidebar.markdown('---')
@@ -369,42 +389,62 @@ metric4.metric('Từ khóa hot', len(keyword_counts))
 # ========== TRENDING KEYWORDS ==========
 st.markdown('## Trending Keywords')
 kw_col1, kw_col2, kw_col3 = st.columns([1.4, 1.6, 1.0])
+
 with kw_col1:
     st.markdown('### Top Keywords')
     if keyword_counts:
-        # Lọc chỉ cụm từ 2-7 từ, không lặp
-        phrase_counts = Counter()
+        # FIX: Lọc cụm 2-3 từ (mặc định mới), fallback sang tất cả nếu không đủ
+        phrase_counts_2_3 = Counter()
+        phrase_counts_all = Counter()
+
         for kw, count in keyword_counts:
             word_count = len(kw.split())
-            if 2 <= word_count <= 4:
-                phrase_counts[kw] = count
-        
-        if phrase_counts:
-            top_phrases = phrase_counts.most_common(20)
-            
-            # Tính TF-IDF trend score
+            phrase_counts_all[kw] = count
+            if 2 <= word_count <= 3:
+                phrase_counts_2_3[kw] = count
+
+        # Ưu tiên cụm 2-3 từ; nếu < 5 kết quả thì dùng tất cả
+        if len(phrase_counts_2_3) >= 5:
+            top_phrases = phrase_counts_2_3.most_common(20)
+            label_note = "cụm 2–3 từ"
+        else:
+            top_phrases = phrase_counts_all.most_common(20)
+            label_note = "tất cả từ khóa"
+
+        st.caption(f"Hiển thị: {label_note} | Tổng: {len(top_phrases)} từ khóa")
+
+        if top_phrases:
             total_count = sum(cnt for _, cnt in top_phrases)
             table_data = []
-            for idx, (ph, cnt) in enumerate(top_phrases[:10], 1):
-                tf = cnt / total_count
-                idf = np.log(20 / max(1, sum(1 for _, c in top_phrases if c >= cnt)))
-                trend_score = (tf * idf) * 100
+            for idx, (ph, cnt) in enumerate(top_phrases[:15], 1):
+                tf = cnt / max(1, total_count)
+                # IDF: log(N / df) — dùng rank làm proxy cho df
+                idf = np.log(max(2, len(top_phrases)) / max(1, idx))
+                trend_score = round(tf * idf * 100, 2)
                 table_data.append({
-                    'Cụm từ hot': ph,
-                    'Tổng lần xuất hiện': cnt,
-                    'Điểm Trend (TF-IDF)': f"{trend_score:.2f}"
+                    'STT': idx,
+                    'Cụm từ hot': ph.title(),
+                    'Số lần xuất hiện': cnt,
+                    'Điểm Trend': trend_score
                 })
-            
+
             kw_df = pd.DataFrame(table_data)
-            st.dataframe(kw_df, use_container_width=True, height=400)
+            st.dataframe(
+                kw_df,
+                use_container_width=True,
+                height=min(60 + len(table_data) * 35, 500),
+                hide_index=True
+            )
         else:
-            st.info('Chưa có cụm từ 2-7 từ nào được tìm thấy.')
+            st.info('Chưa có từ khóa nào được tìm thấy.')
     else:
         st.info('Không đủ dữ liệu từ khóa để hiển thị.')
+
 with kw_col2:
     st.markdown('### Bài viết nổi bật')
     if not filtered.empty:
         top_k = [kw for kw, _ in keyword_counts][:20]
+
         def score_row(row):
             kws = normalize_keywords(row.get('keywords', ''))
             matches = sum(1 for k in kws if k in top_k)
@@ -427,10 +467,11 @@ with kw_col2:
             desc = r.get('description', '')
             st.markdown(f"**[{title}]({link})**  — _{cat}_ — _{pub}_")
             if desc:
-                st.markdown(f"{desc[:200]}...")
+                st.markdown(f"{str(desc)[:200]}...")
             st.markdown('')
     else:
         st.info('Chưa có bài viết để hiển thị.')
+
 with kw_col3:
     st.markdown('### Xu hướng theo ngày')
     if 'published_date' in filtered.columns and len(filtered) > 0:
@@ -443,7 +484,12 @@ with kw_col3:
             template='plotly_dark',
             color_discrete_sequence=['cyan']
         )
-        fig_line.update_layout(height=460, margin=dict(t=30, b=0, l=0, r=0), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+        fig_line.update_layout(
+            height=460,
+            margin=dict(t=30, b=0, l=0, r=0),
+            paper_bgcolor='rgba(0,0,0,0)',
+            plot_bgcolor='rgba(0,0,0,0)'
+        )
         st.plotly_chart(fig_line, use_container_width=True)
     else:
         st.info('Không có dữ liệu xu hướng theo ngày.')
@@ -470,8 +516,11 @@ if trending_events:
     fig_event_trend.update_layout(height=380, margin=dict(t=40, b=40, l=0, r=0), xaxis_tickangle=-20)
     st.plotly_chart(fig_event_trend, use_container_width=True)
 
-    # Cho phép người dùng chọn một chủ đề để xem các bài viết nổi bật liên quan
-    topic_choice = st.selectbox('Chọn chủ đề để xem bài nổi bật', options=[''] + [e['name'] for e in trending_events], index=0)
+    topic_choice = st.selectbox(
+        'Chọn chủ đề để xem bài nổi bật',
+        options=[''] + [e['name'] for e in trending_events],
+        index=0
+    )
 
     event_cols = st.columns(len(trending_events))
     for idx, event in enumerate(trending_events):
@@ -480,8 +529,9 @@ if trending_events:
             st.markdown(f"**Từ khóa liên quan:** {event['keywords'] or 'Không có dữ liệu'}")
             st.markdown(f"**Số bài:** {event['count']}")
             st.markdown(f"**Mức độ hot:** {event['burst']}%")
-            # hiển thị bài nổi bật nhất theo published_date trong filtered
-            top_df = filtered[filtered['category'].astype(str) == event['name']].sort_values('published_date', ascending=False)
+            top_df = filtered[filtered['category'].astype(str) == event['name']].sort_values(
+                'published_date', ascending=False
+            )
             if not top_df.empty:
                 top = top_df.iloc[0]
                 title = top.get('title', 'Không có tiêu đề')
@@ -489,18 +539,19 @@ if trending_events:
                 desc = top.get('description', '')
                 st.markdown(f"**Bài nổi bật:** [{title}]({link})")
                 if desc:
-                    st.markdown(f"_{desc[:240]}..._")
+                    st.markdown(f"_{str(desc)[:240]}..._")
             else:
                 st.markdown('*Chưa có bài nổi bật cho chủ đề này.*')
 
             st.progress(min(event['burst'], 100))
             st.markdown(f"**Trạng thái:** {event_summary.loc[idx, 'status']}")
 
-    # Xu hướng theo ngày cho các chủ đề (dùng dữ liệu đã lọc)
     if 'published_date' in filtered.columns:
         trend_rows = []
         for event in trending_events:
-            counts = filtered[filtered['category'].astype(str) == event['name']].groupby('published_date').size().reset_index(name='count')
+            counts = filtered[filtered['category'].astype(str) == event['name']].groupby(
+                'published_date'
+            ).size().reset_index(name='count')
             counts['event'] = event['name']
             trend_rows.append(counts)
         if trend_rows and any(not r.empty for r in trend_rows):
@@ -519,9 +570,10 @@ if trending_events:
         else:
             st.info('Chưa có dữ liệu xu hướng theo ngày cho các chủ đề đang chọn.')
 
-    # Nếu người dùng chọn một chủ đề cụ thể, hiển thị danh sách bài liên quan có link
     if topic_choice:
-        sel_df = filtered[filtered['category'].astype(str) == topic_choice].sort_values('published_date', ascending=False)
+        sel_df = filtered[filtered['category'].astype(str) == topic_choice].sort_values(
+            'published_date', ascending=False
+        )
         if not sel_df.empty:
             st.markdown(f"### Bài viết nổi bật cho chủ đề: {topic_choice}")
             for _, row in sel_df.head(10).iterrows():
@@ -531,7 +583,7 @@ if trending_events:
                 desc = row.get('description', '')
                 st.markdown(f"- [{title}]({link}) — _{pub}_")
                 if desc:
-                    st.markdown(f"  - {desc[:200]}...")
+                    st.markdown(f"  - {str(desc)[:200]}...")
         else:
             st.info('Không tìm thấy bài cho chủ đề đã chọn.')
 else:
@@ -548,7 +600,11 @@ if not topic_df.empty:
         color_continuous_scale='tealrose',
         template='plotly_dark'
     )
-    fig_topic.update_layout(height=520, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+    fig_topic.update_layout(
+        height=520,
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)'
+    )
     st.plotly_chart(fig_topic, use_container_width=True)
 else:
     st.info('Chưa đủ dữ liệu cho Topic Modeling.')
@@ -559,17 +615,20 @@ keyword_options = [kw for kw, _ in keyword_counts]
 event_options = [''] + [event['name'] for event in trending_events]
 selected_keyword = st.selectbox('Chọn từ khóa', options=keyword_options if keyword_options else [''], index=0)
 selected_event = st.selectbox('Chọn chủ đề hot', options=event_options, index=0)
+
 news_filter = filtered.copy()
 if selected_event:
     news_filter = filtered[filtered['category'].astype(str) == selected_event]
 elif selected_keyword and selected_keyword != '':
-    news_filter = filtered[filtered['keywords'].astype(str).str.contains(selected_keyword, case=False, na=False)]
+    news_filter = filtered[
+        filtered['keywords'].astype(str).str.contains(selected_keyword, case=False, na=False)
+    ]
 
 if not news_filter.empty:
     for _, row in news_filter.sort_values('published_date', ascending=False).head(12).iterrows():
         st.markdown(f"#### [{row['title']}]({row['link']})")
         st.markdown(f"_{row.get('category', 'Không xác định')} • {row.get('published_date', '')}_")
-        st.markdown(row.get('description', ''))
+        st.markdown(str(row.get('description', '')))
         st.markdown('---')
 else:
     st.info('Chưa có bài viết liên quan cho lựa chọn hiện tại.')
@@ -582,9 +641,16 @@ fig_sentiment = px.pie(
     color_discrete_sequence=['#2dd4bf', '#94a3b8', '#f87171'],
     template='plotly_dark'
 )
-fig_sentiment.update_layout(height=420, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+fig_sentiment.update_layout(
+    height=420,
+    paper_bgcolor='rgba(0,0,0,0)',
+    plot_bgcolor='rgba(0,0,0,0)'
+)
 st.plotly_chart(fig_sentiment, use_container_width=True)
 
-# ========== KEYWORD RELATIONSHIP GRAPH ==========
+# ========== FOOTER ==========
 st.markdown('---')
-st.markdown('<div style="text-align:center;color:#9fd8ff;">Realtime analytics dashboard - cập nhật tức thời khi dữ liệu có thay đổi.</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div style="text-align:center;color:#9fd8ff;">Realtime analytics dashboard - cập nhật tức thời khi dữ liệu có thay đổi.</div>',
+    unsafe_allow_html=True
+)
