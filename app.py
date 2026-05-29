@@ -100,18 +100,38 @@ def get_keyword_counts(df, top_n=40):
     return Counter(all_keywords).most_common(top_n)
 
 
-def build_event_cards(df, top_n=4):
-    top_keywords = [kw for kw, _ in get_keyword_counts(df, top_n=12)]
+def build_topic_events(df, top_n=4):
+    if 'category' not in df.columns:
+        return []
+    df = df.copy()
+    if 'published_date' in df.columns:
+        recent_threshold = datetime.now().date() - timedelta(days=7)
+        df_recent = df[df['published_date'] >= recent_threshold]
+    else:
+        df_recent = df
+
+    category_counts = df['category'].value_counts()
+    recent_counts = df_recent['category'].value_counts()
+
     events = []
-    for i, keyword in enumerate(top_keywords[:top_n]):
-        related = df[df['keywords'].astype(str).str.contains(keyword, case=False, na=False)]
-        burst = min(100, max(10, int((len(related) / max(1, len(df))) * 200)))
+    for category, count in category_counts.items():
+        recent_count = int(recent_counts.get(category, 0))
+        burst = min(100, max(10, int((recent_count / max(1, count)) * 100)))
+        keywords = []
+        if 'keywords' in df.columns:
+            category_keywords = []
+            for row in df[df['category'] == category]['keywords'].dropna():
+                category_keywords.extend(normalize_keywords(row))
+            keywords = [kw for kw, _ in Counter(category_keywords).most_common(5)]
         events.append({
-            'name': keyword.title(),
-            'keywords': ', '.join(top_keywords[i:i+3]),
-            'count': len(related),
-            'burst': burst
+            'name': category,
+            'keywords': ', '.join(keywords[:5]),
+            'count': int(count),
+            'burst': burst,
+            'recent_count': recent_count
         })
+
+    events = sorted(events, key=lambda x: x['burst'], reverse=True)[:top_n]
     return events
 
 
@@ -304,7 +324,7 @@ if category_filter:
     filtered = filtered[filtered['category'].isin(category_filter)]
 
 keyword_counts = get_keyword_counts(df, top_n=40)
-trending_events = build_event_cards(df, top_n=4)
+trending_events = build_topic_events(df, top_n=4)
 sentiment_counts = aggregate_sentiment(filtered)
 keyword_nodes, keyword_edges = build_keyword_network(filtered, top_n=20)
 topic_df = prepare_topic_tree(filtered)
@@ -316,7 +336,7 @@ st.markdown('**Dark mode analytics dashboard cho tin tức realtime & social lis
 metric1, metric2, metric3, metric4 = st.columns(4)
 metric1.metric('Tổng bài viết', len(filtered), delta=f'{len(filtered) - len(df):+d}')
 metric2.metric('Số chủ đề', filtered['category'].nunique() if 'category' in filtered.columns else 0)
-metric3.metric('Sự kiện nổi bật', len(trending_events))
+metric3.metric('Chủ đề hot', len(trending_events))
 metric4.metric('Từ khóa hot', len(keyword_counts))
 
 # ========== TRENDING KEYWORDS ==========
@@ -454,11 +474,10 @@ st.markdown('## News Explorer')
 keyword_options = [kw for kw, _ in keyword_counts]
 event_options = [event['name'] for event in trending_events]
 selected_keyword = st.selectbox('Chọn từ khóa', options=keyword_options if keyword_options else [''], index=0)
-selected_event = st.selectbox('Chọn sự kiện', options=event_options if event_options else [''], index=0)
+selected_event = st.selectbox('Chọn sự kiện (chủ đề hot)', options=event_options if event_options else [''], index=0)
 news_filter = pd.DataFrame()
 if selected_event and selected_event != '' and trending_events:
-    oname = selected_event.lower()
-    news_filter = df[df['keywords'].astype(str).str.contains(oname, case=False, na=False)]
+    news_filter = df[df['category'].astype(str).str.contains(selected_event, case=False, na=False)]
 elif selected_keyword and selected_keyword != '':
     news_filter = df[df['keywords'].astype(str).str.contains(selected_keyword, case=False, na=False)]
 
