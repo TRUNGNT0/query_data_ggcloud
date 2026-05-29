@@ -323,8 +323,8 @@ if 'published_date' in filtered.columns:
 if category_filter:
     filtered = filtered[filtered['category'].isin(category_filter)]
 
-keyword_counts = get_keyword_counts(df, top_n=40)
-trending_events = build_topic_events(df, top_n=4)
+keyword_counts = get_keyword_counts(filtered, top_n=40)
+trending_events = build_topic_events(filtered, top_n=4)
 sentiment_counts = aggregate_sentiment(filtered)
 keyword_nodes, keyword_edges = build_keyword_network(filtered, top_n=20)
 topic_df = prepare_topic_tree(filtered)
@@ -423,33 +423,34 @@ if trending_events:
     event_cols = st.columns(len(trending_events))
     for idx, event in enumerate(trending_events):
         with event_cols[idx]:
-            st.markdown(f"### {event['name']}")
-            st.markdown(f"**Keywords chính:** {event['keywords']}")
-            st.markdown(f"**Số bài liên quan:** {event['count']}")
-            st.markdown(f"**Mức độ bùng nổ:** {event['burst']}%")
+            st.markdown(f"### Chủ đề: {event['name']}")
+            st.markdown(f"**Từ khóa liên quan:** {event['keywords'] or 'Không có dữ liệu'}")
+            st.markdown(f"**Số bài:** {event['count']}")
+            st.markdown(f"**Mức độ hot:** {event['burst']}%")
             st.progress(min(event['burst'], 100))
             st.markdown(f"**Trạng thái:** {event_summary.loc[idx, 'status']}")
 
-    if 'published_date' in df.columns:
+    if 'published_date' in filtered.columns:
         trend_rows = []
         for event in trending_events:
-            mask = df['keywords'].astype(str).str.contains(event['name'], case=False, na=False)
-            counts = df[mask].groupby('published_date').size().reset_index(name='count')
+            counts = filtered[filtered['category'].astype(str) == event['name']].groupby('published_date').size().reset_index(name='count')
             counts['event'] = event['name']
             trend_rows.append(counts)
-        if trend_rows:
-            event_trends = pd.concat(trend_rows, ignore_index=True)
+        if trend_rows and any(not r.empty for r in trend_rows):
+            event_trends = pd.concat([r for r in trend_rows if not r.empty], ignore_index=True)
             fig_event_time = px.line(
                 event_trends,
                 x='published_date',
                 y='count',
                 color='event',
                 markers=True,
-                title='Xu hướng theo ngày của sự kiện',
+                title='Xu hướng theo ngày của chủ đề hot',
                 template='plotly_dark'
             )
             fig_event_time.update_layout(height=420, margin=dict(t=40, b=40, l=0, r=0))
             st.plotly_chart(fig_event_time, use_container_width=True)
+        else:
+            st.info('Chưa có dữ liệu xu hướng theo ngày cho các chủ đề đang chọn.')
 else:
     st.info('Chưa có sự kiện trending để hiển thị.')
 
@@ -472,14 +473,14 @@ else:
 # ========== NEWS EXPLORER ==========
 st.markdown('## News Explorer')
 keyword_options = [kw for kw, _ in keyword_counts]
-event_options = [event['name'] for event in trending_events]
+event_options = [''] + [event['name'] for event in trending_events]
 selected_keyword = st.selectbox('Chọn từ khóa', options=keyword_options if keyword_options else [''], index=0)
-selected_event = st.selectbox('Chọn sự kiện (chủ đề hot)', options=event_options if event_options else [''], index=0)
-news_filter = pd.DataFrame()
-if selected_event and selected_event != '' and trending_events:
-    news_filter = df[df['category'].astype(str).str.contains(selected_event, case=False, na=False)]
+selected_event = st.selectbox('Chọn chủ đề hot', options=event_options, index=0)
+news_filter = filtered.copy()
+if selected_event:
+    news_filter = filtered[filtered['category'].astype(str) == selected_event]
 elif selected_keyword and selected_keyword != '':
-    news_filter = df[df['keywords'].astype(str).str.contains(selected_keyword, case=False, na=False)]
+    news_filter = filtered[filtered['keywords'].astype(str).str.contains(selected_keyword, case=False, na=False)]
 
 if not news_filter.empty:
     for _, row in news_filter.sort_values('published_date', ascending=False).head(12).iterrows():
