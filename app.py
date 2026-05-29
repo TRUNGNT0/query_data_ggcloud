@@ -372,18 +372,34 @@ kw_col1, kw_col2, kw_col3 = st.columns([1.4, 1.6, 1.0])
 with kw_col1:
     st.markdown('### Top Keywords')
     if keyword_counts:
-        top_kw_df = pd.DataFrame(keyword_counts, columns=['keyword', 'count']).head(12)
-        fig_kw = px.bar(
-            top_kw_df,
-            x='count',
-            y='keyword',
-            orientation='h',
-            color='count',
-            color_continuous_scale='tealrose',
-            template='plotly_dark'
-        )
-        fig_kw.update_layout(height=460, margin=dict(l=0, r=0, t=30, b=0), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-        st.plotly_chart(fig_kw, use_container_width=True)
+        # Lọc chỉ cụm từ 2-7 từ, không lặp
+        phrase_counts = Counter()
+        for kw, count in keyword_counts:
+            word_count = len(kw.split())
+            if 2 <= word_count <= 7:
+                phrase_counts[kw] = count
+        
+        if phrase_counts:
+            top_phrases = phrase_counts.most_common(20)
+            # Hiển thị các cụm từ duy nhất dưới dạng tags
+            kw_text = ', '.join([f"**{ph}** ({cnt})" for ph, cnt in top_phrases[:15]])
+            st.markdown(f"**Cụm từ nổi bật:** {kw_text}")
+            
+            # Biểu đồ bar nhỏ hơn
+            kw_df = pd.DataFrame(top_phrases, columns=['phrase', 'count'])
+            fig_kw = px.bar(
+                kw_df,
+                x='count',
+                y='phrase',
+                orientation='h',
+                color='count',
+                color_continuous_scale='tealrose',
+                template='plotly_dark'
+            )
+            fig_kw.update_layout(height=380, margin=dict(l=0, r=0, t=30, b=0), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', showlegend=False)
+            st.plotly_chart(fig_kw, use_container_width=True)
+        else:
+            st.info('Chưa có cụm từ 2-7 từ nào được tìm thấy.')
     else:
         st.info('Không đủ dữ liệu từ khóa để hiển thị.')
 with kw_col2:
