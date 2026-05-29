@@ -368,7 +368,7 @@ metric4.metric('Từ khóa hot', len(keyword_counts))
 
 # ========== TRENDING KEYWORDS ==========
 st.markdown('## Trending Keywords')
-kw_col1, kw_col2, kw_col3 = st.columns([1.5, 1.2, 1.3])
+kw_col1, kw_col2, kw_col3 = st.columns([1.4, 1.6, 1.0])
 with kw_col1:
     st.markdown('### Top Keywords')
     if keyword_counts:
@@ -387,27 +387,35 @@ with kw_col1:
     else:
         st.info('Không đủ dữ liệu từ khóa để hiển thị.')
 with kw_col2:
-    st.markdown('### Word Cloud')
-    if keyword_counts:
-        cloud_df = pd.DataFrame(keyword_counts[:30], columns=['keyword', 'count'])
-        cloud_df['x'] = np.random.uniform(0, 1, size=len(cloud_df))
-        cloud_df['y'] = np.random.uniform(0, 1, size=len(cloud_df))
-        cloud_df['size'] = cloud_df['count'] / cloud_df['count'].max() * 45 + 10
-        fig_cloud = px.scatter(
-            cloud_df,
-            x='x',
-            y='y',
-            size='size',
-            text='keyword',
-            color='count',
-            color_continuous_scale='teal',
-            template='plotly_dark'
-        )
-        fig_cloud.update_traces(textposition='middle center', marker=dict(opacity=0.75))
-        fig_cloud.update_layout(height=460, xaxis={'visible': False}, yaxis={'visible': False}, showlegend=False, margin=dict(t=10, b=10, l=10, r=10), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-        st.plotly_chart(fig_cloud, use_container_width=True)
+    st.markdown('### Bài viết nổi bật')
+    if not filtered.empty:
+        top_k = [kw for kw, _ in keyword_counts][:20]
+        def score_row(row):
+            kws = normalize_keywords(row.get('keywords', ''))
+            matches = sum(1 for k in kws if k in top_k)
+            pub = row.get('published_date', None)
+            try:
+                days = (datetime.now().date() - pd.to_datetime(pub).date()).days if pub is not None else 0
+            except Exception:
+                days = 0
+            recency = max(0, 7 - days)
+            return matches * 2 + recency
+
+        tmp = filtered.copy()
+        tmp['score'] = tmp.apply(score_row, axis=1)
+        top_articles = tmp.sort_values(['score', 'published_date'], ascending=[False, False]).head(12)
+        for _, r in top_articles.iterrows():
+            title = r.get('title', 'Không có tiêu đề')
+            link = r.get('link', '#')
+            cat = r.get('category', 'Không xác định')
+            pub = r.get('published_date', '')
+            desc = r.get('description', '')
+            st.markdown(f"**[{title}]({link})**  — _{cat}_ — _{pub}_")
+            if desc:
+                st.markdown(f"{desc[:200]}...")
+            st.markdown('')
     else:
-        st.info('Chưa có dữ liệu để tạo word cloud.')
+        st.info('Chưa có bài viết để hiển thị.')
 with kw_col3:
     st.markdown('### Xu hướng theo ngày')
     if 'published_date' in filtered.columns and len(filtered) > 0:
