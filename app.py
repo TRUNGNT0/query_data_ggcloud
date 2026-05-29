@@ -440,12 +440,15 @@ if trending_events:
         y='score',
         color='status',
         color_discrete_map={'Hot': '#f97316', 'Trending': '#38bdf8', 'Emerging': '#34d399'},
-        title='Sự kiện hot / trending',
-        labels={'name': 'Event', 'score': 'Burst score (%)'},
+        title='Chủ đề hot / trending',
+        labels={'name': 'Chủ đề', 'score': 'Burst score (%)'},
         template='plotly_dark'
     )
     fig_event_trend.update_layout(height=380, margin=dict(t=40, b=40, l=0, r=0), xaxis_tickangle=-20)
     st.plotly_chart(fig_event_trend, use_container_width=True)
+
+    # Cho phép người dùng chọn một chủ đề để xem các bài viết nổi bật liên quan
+    topic_choice = st.selectbox('Chọn chủ đề để xem bài nổi bật', options=[''] + [e['name'] for e in trending_events], index=0)
 
     event_cols = st.columns(len(trending_events))
     for idx, event in enumerate(trending_events):
@@ -454,9 +457,23 @@ if trending_events:
             st.markdown(f"**Từ khóa liên quan:** {event['keywords'] or 'Không có dữ liệu'}")
             st.markdown(f"**Số bài:** {event['count']}")
             st.markdown(f"**Mức độ hot:** {event['burst']}%")
+            # hiển thị bài nổi bật nhất theo published_date trong filtered
+            top_df = filtered[filtered['category'].astype(str) == event['name']].sort_values('published_date', ascending=False)
+            if not top_df.empty:
+                top = top_df.iloc[0]
+                title = top.get('title', 'Không có tiêu đề')
+                link = top.get('link', '#')
+                desc = top.get('description', '')
+                st.markdown(f"**Bài nổi bật:** [{title}]({link})")
+                if desc:
+                    st.markdown(f"_{desc[:240]}..._")
+            else:
+                st.markdown('*Chưa có bài nổi bật cho chủ đề này.*')
+
             st.progress(min(event['burst'], 100))
             st.markdown(f"**Trạng thái:** {event_summary.loc[idx, 'status']}")
 
+    # Xu hướng theo ngày cho các chủ đề (dùng dữ liệu đã lọc)
     if 'published_date' in filtered.columns:
         trend_rows = []
         for event in trending_events:
@@ -478,6 +495,22 @@ if trending_events:
             st.plotly_chart(fig_event_time, use_container_width=True)
         else:
             st.info('Chưa có dữ liệu xu hướng theo ngày cho các chủ đề đang chọn.')
+
+    # Nếu người dùng chọn một chủ đề cụ thể, hiển thị danh sách bài liên quan có link
+    if topic_choice:
+        sel_df = filtered[filtered['category'].astype(str) == topic_choice].sort_values('published_date', ascending=False)
+        if not sel_df.empty:
+            st.markdown(f"### Bài viết nổi bật cho chủ đề: {topic_choice}")
+            for _, row in sel_df.head(10).iterrows():
+                title = row.get('title', 'Không có tiêu đề')
+                link = row.get('link', '#')
+                pub = row.get('published_date', '')
+                desc = row.get('description', '')
+                st.markdown(f"- [{title}]({link}) — _{pub}_")
+                if desc:
+                    st.markdown(f"  - {desc[:200]}...")
+        else:
+            st.info('Không tìm thấy bài cho chủ đề đã chọn.')
 else:
     st.info('Chưa có sự kiện trending để hiển thị.')
 
@@ -530,42 +563,5 @@ fig_sentiment.update_layout(height=420, paper_bgcolor='rgba(0,0,0,0)', plot_bgco
 st.plotly_chart(fig_sentiment, use_container_width=True)
 
 # ========== KEYWORD RELATIONSHIP GRAPH ==========
-st.markdown('## Keyword Relationship Graph')
-if keyword_nodes and keyword_edges:
-    node_positions = {}
-    angle_step = 2 * np.pi / len(keyword_nodes)
-    for i, node in enumerate(keyword_nodes):
-        node_positions[node['id']] = (np.cos(i * angle_step), np.sin(i * angle_step))
-    edge_x = []
-    edge_y = []
-    for edge in keyword_edges:
-        x0, y0 = node_positions[edge['from']]
-        x1, y1 = node_positions[edge['to']]
-        edge_x += [x0, x1, None]
-        edge_y += [y0, y1, None]
-    fig_graph = go.Figure()
-    fig_graph.add_trace(go.Scatter(x=edge_x, y=edge_y, mode='lines', line=dict(color='#26c6da', width=1), hoverinfo='none'))
-    fig_graph.add_trace(go.Scatter(
-        x=[node_positions[node['id']][0] for node in keyword_nodes],
-        y=[node_positions[node['id']][1] for node in keyword_nodes],
-        mode='markers+text',
-        marker=dict(size=[max(8, min(40, node['size'] * 1.5)) for node in keyword_nodes], color='#0aefff'),
-        text=[node['id'] for node in keyword_nodes],
-        textposition='top center',
-        hovertemplate='<b>%{text}</b>',
-    ))
-    fig_graph.update_layout(height=520, xaxis=dict(showgrid=False, zeroline=False, visible=False), yaxis=dict(showgrid=False, zeroline=False, visible=False), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
-    st.plotly_chart(fig_graph, use_container_width=True)
-else:
-    st.info('Chưa đủ dữ liệu để xây dựng mối quan hệ từ khóa.')
-
-# ========== LIVE FEED ==========
-st.markdown('## Live Feed')
-if 'published_date' in df.columns:
-    latest = df.sort_values('published_date', ascending=False).head(8)
-else:
-    latest = df.head(8)
-for _, row in latest.iterrows():
-    st.markdown(f"- [{row['title']}]({row['link']}) — _{row.get('category', 'Không xác định')}_")
 st.markdown('---')
 st.markdown('<div style="text-align:center;color:#9fd8ff;">Realtime analytics dashboard - cập nhật tức thời khi dữ liệu có thay đổi.</div>', unsafe_allow_html=True)
