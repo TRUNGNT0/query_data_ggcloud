@@ -62,14 +62,14 @@ def load_data_from_bigquery():
                 title,
                 description,
                 category,
-                published_date,
+                publish_date AS published_date,
                 keywords,
                 sentiment_score,
                 view_count,
                 interaction_count
             FROM `project-ceb4f683-ad1a-44e3-8d8.bigdata_project.vnexpress_world_news`
-            WHERE published_date >= CURRENT_DATE() - 90
-            ORDER BY published_date DESC
+            WHERE publish_date >= CURRENT_DATE() - 90
+            ORDER BY publish_date DESC
         """
         df = client.query(query).to_dataframe()
         df['published_date'] = pd.to_datetime(df['published_date']).dt.date
