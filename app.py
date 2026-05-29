@@ -109,10 +109,13 @@ def normalize_keywords(keywords):
         words = [w for w in re.split(r'\s+', item_text) if w and w not in STOPWORDS]
         if not words:
             continue
-        if len(words) >= 2:
-            normalized.append(' '.join(words))
-        elif len(words) == 1 and len(words[0]) >= 4:
-            normalized.append(words[0])
+        filtered_words = [w for w in words if 2 <= len(w) <= 7]
+        if not filtered_words:
+            continue
+        if len(filtered_words) >= 2:
+            normalized.append(' '.join(filtered_words))
+        elif len(filtered_words) == 1:
+            normalized.append(filtered_words[0])
     return normalized
 
 
