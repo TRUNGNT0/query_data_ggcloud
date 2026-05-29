@@ -3,6 +3,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime, timedelta
+from collections import Counter
+import re
 import json
 from google.cloud import bigquery
 from google.cloud import storage
@@ -20,24 +22,54 @@ st.set_page_config(
 # ========== CSS ĐẶC BIỆT ==========
 st.markdown("""
     <style>
-        .main {
-            padding: 0rem 1rem;
+        :root {
+            color-scheme: dark;
         }
-        .metric-box {
-            background-color: #f0f2f6;
-            padding: 1.5rem;
-            border-radius: 0.5rem;
-            margin-bottom: 1rem;
+        body {
+            background-color: #061a26;
+            color: #e8f8ff;
         }
-        h1 {
-            color: #1f77b4;
-            font-size: 2.5rem;
-            font-weight: bold;
+        .stApp {
+            background: linear-gradient(135deg, #02111b 0%, #062836 50%, #051d2c 100%);
+            color: #eef8ff;
         }
-        h2 {
-            color: #1f77b4;
-            border-bottom: 3px solid #1f77b4;
-            padding-bottom: 0.5rem;
+        .css-18e3th9 {
+            background-color: transparent;
+        }
+        .css-1d391kg {
+            background-color: rgba(3, 29, 44, 0.82);
+        }
+        .stButton>button {
+            background-color: #0fb5ff;
+            color: white;
+            border: none;
+        }
+        .stButton>button:hover {
+            background-color: #24c5ff;
+            color: white;
+        }
+        .st-b8 {
+            background: rgba(255,255,255,0.05);
+        }
+        .block-container {
+            padding: 1.2rem 1.5rem 0 1.5rem;
+        }
+        .reportview-container .main .block-container {
+            padding-top: 1rem;
+        }
+        .css-1aumxhk {
+            background: rgba(4, 29, 45, 0.7);
+        }
+        .stSidebar {
+            background-color: #031519;
+        }
+        .stMarkdown h1, .stMarkdown h2, .stMarkdown h3, .stMarkdown h4 {
+            color: #d3f9ff;
+        }
+        .stMetric {
+            background: rgba(6, 29, 46, 0.85);
+            border: 1px solid rgba(15, 181, 255, 0.25);
+            border-radius: 1rem;
         }
     </style>
     """, unsafe_allow_html=True)
@@ -49,6 +81,90 @@ if 'last_refresh' not in st.session_state:
     st.session_state.last_refresh = None
 if 'bigquery_error' not in st.session_state:
     st.session_state.bigquery_error = None
+
+# ========== HELPER FUNCTIONS ==========
+def normalize_keywords(keywords):
+    if isinstance(keywords, list):
+        return [str(k).strip().lower().replace('_', ' ') for k in keywords if k]
+    if isinstance(keywords, str):
+        tokens = re.split(r'[;,\s]+', keywords)
+        return [t.strip().lower().replace('_', ' ') for t in tokens if t]
+    return []
+
+
+def get_keyword_counts(df, top_n=40):
+    all_keywords = []
+    if 'keywords' in df.columns:
+        for row in df['keywords'].dropna():
+            all_keywords.extend(normalize_keywords(row))
+    return Counter(all_keywords).most_common(top_n)
+
+
+def build_event_cards(df, top_n=4):
+    top_keywords = [kw for kw, _ in get_keyword_counts(df, top_n=12)]
+    events = []
+    for i, keyword in enumerate(top_keywords[:top_n]):
+        related = df[df['keywords'].astype(str).str.contains(keyword, case=False, na=False)]
+        burst = min(100, max(10, int((len(related) / max(1, len(df))) * 200)))
+        events.append({
+            'name': keyword.title(),
+            'keywords': ', '.join(top_keywords[i:i+3]),
+            'count': len(related),
+            'burst': burst
+        })
+    return events
+
+
+def simple_sentiment_analysis(text):
+    positive = ['tốt', 'tăng', 'hoạt động', 'thắng', 'tin vui', 'mạnh', 'vươn lên', 'đạt']
+    negative = ['lo ngại', 'khó', 'thiệt', 'sụp', 'giảm', 'sự cố', 'nguy', 'bùng nổ', 'tấn công']
+    if not isinstance(text, str):
+        return 0
+    text_lower = text.lower()
+    score = sum(word in text_lower for word in positive) - sum(word in text_lower for word in negative)
+    return score
+
+
+def aggregate_sentiment(df):
+    if 'sentiment' in df.columns:
+        sentiments = df['sentiment'].dropna().tolist()
+    else:
+        sentiments = [simple_sentiment_analysis(text) for text in df['description'].fillna('')]
+    positive = sum(1 for v in sentiments if v > 0)
+    negative = sum(1 for v in sentiments if v < 0)
+    neutral = len(sentiments) - positive - negative
+    return {'positive': positive, 'negative': negative, 'neutral': neutral}
+
+
+def build_keyword_network(df, top_n=20):
+    counts = Counter()
+    if 'keywords' in df.columns:
+        for row in df['keywords'].dropna():
+            counts.update(normalize_keywords(row))
+    top_keywords = [kw for kw, _ in counts.most_common(top_n)]
+    cooccurrence = Counter()
+    for row in df['keywords'].dropna():
+        normalized = [kw for kw in normalize_keywords(row) if kw in top_keywords]
+        for i in range(len(normalized)):
+            for j in range(i + 1, len(normalized)):
+                cooccurrence[tuple(sorted([normalized[i], normalized[j]]))] += 1
+    nodes = [{'id': kw, 'size': counts[kw]} for kw in top_keywords]
+    edges = [{'from': a, 'to': b, 'weight': weight} for (a, b), weight in cooccurrence.items() if weight > 1]
+    return nodes, edges
+
+
+def prepare_topic_tree(df):
+    rows = []
+    if 'category' in df.columns:
+        for category in df['category'].dropna().unique():
+            category_df = df[df['category'] == category]
+            keywords = Counter()
+            if 'keywords' in category_df.columns:
+                for row in category_df['keywords'].dropna():
+                    keywords.update(normalize_keywords(row))
+            for kw, count in keywords.most_common(8):
+                rows.append({'category': category, 'keyword': kw.title(), 'count': count})
+    return pd.DataFrame(rows)
 
 # ========== ĐỌC DỮ LIỆU TỪ BIGQUERY ==========
 @st.cache_data(ttl=3600)
@@ -120,312 +236,245 @@ def load_sample_data():
     return pd.DataFrame(data)
 
 # ========== LOAD DỮ LIỆU ==========
-uploaded_file = st.sidebar.file_uploader("Tải lên file dữ liệu CSV/JSON", type=['csv', 'json'])
+source_options = ['BigQuery', 'Mẫu nội bộ', 'Upload JSON/CSV']
+data_source = st.sidebar.selectbox('Nguồn dữ liệu', source_options, index=0)
+uploaded_file = st.sidebar.file_uploader('Tải lên dữ liệu JSON/CSV', type=['json', 'csv'])
 use_local_sample = False
 
 if uploaded_file is not None:
     try:
         if uploaded_file.type == 'application/json':
-            df = pd.read_json(uploaded_file)
+            try:
+                df = pd.read_json(uploaded_file, lines=True)
+            except ValueError:
+                uploaded_file.seek(0)
+                df = pd.read_json(uploaded_file)
         else:
             df = pd.read_csv(uploaded_file)
-        df['published_date'] = pd.to_datetime(df['published_date']).dt.date
-        st.sidebar.success("✅ Đã tải dữ liệu từ file thành công.")
+        if 'published_date' in df.columns:
+            df['published_date'] = pd.to_datetime(df['published_date']).dt.date
+        st.sidebar.success('✅ Dữ liệu tải lên thành công.')
     except Exception as e:
-        st.sidebar.error(f"❌ Không đọc được file: {e}")
+        st.sidebar.error(f'❌ Không đọc được file: {e}')
         df = load_sample_data()
         use_local_sample = True
-else:
+elif data_source == 'BigQuery':
     st.session_state.df_cache = load_data_from_bigquery()
     if st.session_state.df_cache is None:
         df = load_sample_data()
         use_local_sample = True
     else:
         df = st.session_state.df_cache
+else:
+    df = load_sample_data()
+    use_local_sample = True
+
+if 'clean_keywords' in df.columns and 'keywords' not in df.columns:
+    df['keywords'] = df['clean_keywords'].apply(
+        lambda x: ', '.join(x) if isinstance(x, list) else (str(x) if pd.notna(x) else '')
+    )
+elif 'keywords' not in df.columns:
+    df['keywords'] = ''
+
+if 'published_date' in df.columns:
+    df['published_date'] = pd.to_datetime(df['published_date']).dt.date
 
 if st.session_state.bigquery_error:
-    st.warning(
-        "⚠️ Không thể kết nối BigQuery. Ứng dụng sẽ dùng dữ liệu mẫu hoặc bạn có thể tải file dữ liệu CSV/JSON.")
+    st.warning('⚠️ Không thể kết nối BigQuery. Ứng dụng sẽ dùng dữ liệu mẫu hoặc bạn có thể tải file dữ liệu CSV/JSON.')
     st.info(st.session_state.bigquery_error)
 
-# ========== HEADER ==========
-col1, col2 = st.columns([0.8, 0.2])
-with col1:
-    st.title("📊 News Analytics Dashboard")
-    st.markdown("Trực quan dữ liệu tin tức - Tương tự Google Report")
-    if use_local_sample:
-        st.info("Dữ liệu hiện tại là dữ liệu mẫu vì không thể truy cập BigQuery.")
-
-with col2:
-    if st.button("🔄 Làm mới", key="refresh_btn"):
-        st.session_state.df_cache = None
-        st.cache_data.clear()
-        st.rerun()
-
-# ========== SIDEBAR - BỘ LỌC ==========
-st.sidebar.title("🔍 Bộ Lọc")
-
-# Lọc theo thời gian (chỉ ngày)
-date_range = st.sidebar.date_input(
-    "Chọn khoảng thời gian (Ngày)",
-    value=(datetime.now().date() - timedelta(days=30), datetime.now().date()),
+st.sidebar.markdown('---')
+st.sidebar.markdown('## Bộ lọc nâng cao')
+start_date, end_date = st.sidebar.date_input(
+    'Khoảng thời gian',
+    value=(datetime.now().date() - timedelta(days=14), datetime.now().date()),
     max_value=datetime.now().date()
 )
-
-# Lọc theo danh mục
-categories = st.sidebar.multiselect(
-    "Danh mục",
-    options=df['category'].unique() if 'category' in df.columns else [],
-    default=df['category'].unique() if 'category' in df.columns else []
+category_filter = st.sidebar.multiselect(
+    'Danh mục',
+    options=df['category'].dropna().unique().tolist() if 'category' in df.columns else [],
+    default=df['category'].dropna().unique().tolist() if 'category' in df.columns else []
 )
 
-# Lọc theo từ khóa
-keyword_filter = st.sidebar.text_input("Tìm kiếm từ khóa")
+# ========== DỮ LIỆU CHUNG ==========
+filtered = df.copy()
+if 'published_date' in filtered.columns:
+    filtered = filtered[(filtered['published_date'] >= start_date) & (filtered['published_date'] <= end_date)]
+if category_filter:
+    filtered = filtered[filtered['category'].isin(category_filter)]
 
-# ========== LỌC DỮ LIỆU ==========
-df_filtered = df.copy()
+keyword_counts = get_keyword_counts(df, top_n=40)
+trending_events = build_event_cards(df, top_n=4)
+sentiment_counts = aggregate_sentiment(filtered)
+keyword_nodes, keyword_edges = build_keyword_network(filtered, top_n=20)
+topic_df = prepare_topic_tree(filtered)
 
-# Lọc theo thời gian
-if len(date_range) == 2:
-    start_date, end_date = date_range
-    df_filtered = df_filtered[
-        (df_filtered['published_date'] >= start_date) & 
-        (df_filtered['published_date'] <= end_date)
-    ]
+# ========== HEADER ==========
+st.markdown('# News Intelligence Dashboard')
+st.markdown('**Dark mode analytics dashboard cho tin tức realtime & social listening.**')
 
-# Lọc theo danh mục
-if categories:
-    df_filtered = df_filtered[df_filtered['category'].isin(categories)]
+metric1, metric2, metric3, metric4 = st.columns(4)
+metric1.metric('Tổng bài viết', len(filtered), delta=f'{len(filtered) - len(df):+d}')
+metric2.metric('Số chủ đề', filtered['category'].nunique() if 'category' in filtered.columns else 0)
+metric3.metric('Sự kiện nổi bật', len(trending_events))
+metric4.metric('Từ khóa hot', len(keyword_counts))
 
-# Lọc theo từ khóa
-if keyword_filter:
-    df_filtered = df_filtered[
-        df_filtered['title'].str.contains(keyword_filter, case=False, na=False) |
-        df_filtered['keywords'].astype(str).str.contains(keyword_filter, case=False, na=False)
-    ]
-
-# ========== KPI CHÍNH ==========
-st.markdown("## 📈 Số liệu chính")
-col1, col2, col3, col4 = st.columns(4)
-
-with col1:
-    st.metric(
-        label="📰 Tổng bài viết",
-        value=len(df_filtered),
-        delta=len(df_filtered) - len(df) if len(df) > 0 else 0
-    )
-
-with col2:
-    num_categories = df_filtered['category'].nunique() if 'category' in df_filtered.columns else 0
-    st.metric(
-        label="🏷️ Danh mục",
-        value=num_categories,
-        delta=None
-    )
-
-with col3:
-    num_keywords = 0
-    if 'keywords' in df_filtered.columns and len(df_filtered) > 0:
-        all_kw = []
-        for kw_str in df_filtered['keywords'].dropna():
-            if isinstance(kw_str, str):
-                all_kw.extend([k.strip() for k in kw_str.split(',')])
-        num_keywords = len(set(all_kw))
-    st.metric(
-        label="🔑 Từ khóa độc nhất",
-        value=num_keywords,
-        delta=None
-    )
-
-with col4:
-    if 'category' in df_filtered.columns and len(df_filtered) > 0:
-        top_category = df_filtered['category'].value_counts().index[0]
-    else:
-        top_category = "N/A"
-    st.metric(
-        label="🏆 Danh mục top",
-        value=top_category,
-        delta=None
-    )
-
-# ========== TABS CHÍNH ==========
-tab1, tab2, tab3, tab4, tab5 = st.tabs(
-    ["📊 Biểu đồ", "📋 Bảng dữ liệu", "🏷️ Phân tích từ khóa", "📅 Xu hướng theo ngày", "⚙️ Chi tiết"]
-)
-
-# ========== TAB 1: BIỂU ĐỒ ==========
-with tab1:
-    st.markdown("### Phân bố theo danh mục")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if 'category' in df_filtered.columns and len(df_filtered) > 0:
-            category_counts = df_filtered['category'].value_counts()
-            fig1 = go.Figure(data=[
-                go.Pie(
-                    labels=category_counts.index,
-                    values=category_counts.values,
-                    hovertemplate="<b>%{label}</b><br>Bài viết: %{value}<extra></extra>"
-                )
-            ])
-            fig1.update_layout(height=400, title_text="Phân bố danh mục")
-            st.plotly_chart(fig1, use_container_width=True)
-        else:
-            st.info("Không có dữ liệu danh mục")
-    
-    with col2:
-        if 'category' in df_filtered.columns and len(df_filtered) > 0:
-            category_counts = df_filtered['category'].value_counts().head(10)
-            fig2 = go.Figure(data=[
-                go.Bar(
-                    y=category_counts.index,
-                    x=category_counts.values,
-                    orientation='h',
-                    marker_color='#ff7f0e',
-                    hovertemplate="<b>%{y}</b><br>Bài viết: %{x}<extra></extra>"
-                )
-            ])
-            fig2.update_layout(
-                height=400,
-                title_text="Top 10 danh mục nhiều bài nhất",
-                xaxis_title="Số bài viết",
-                yaxis_title=""
-            )
-            st.plotly_chart(fig2, use_container_width=True)
-
-# ========== TAB 2: BẢNG DỮ LIỆU ==========
-with tab2:
-    st.markdown("### Danh sách chi tiết bài viết")
-    
-    display_columns = [col for col in ['title', 'category', 'published_date', 'description'] 
-                       if col in df_filtered.columns]
-    
-    if len(df_filtered) > 0:
-        display_df = df_filtered[display_columns].copy()
-        display_df.columns = ['Tiêu đề', 'Danh mục', 'Ngày đăng', 'Mô tả']
-        
-        st.dataframe(
-            display_df,
-            use_container_width=True,
-            height=400,
-            column_config={
-                "Tiêu đề": st.column_config.TextColumn(width="large"),
-                "Danh mục": st.column_config.TextColumn(width="small"),
-                "Ngày đăng": st.column_config.DateColumn(width="small"),
-                "Mô tả": st.column_config.TextColumn(width="medium")
-            }
+# ========== TRENDING KEYWORDS ==========
+st.markdown('## Trending Keywords')
+kw_col1, kw_col2, kw_col3 = st.columns([1.5, 1.2, 1.3])
+with kw_col1:
+    st.markdown('### Top Keywords')
+    if keyword_counts:
+        top_kw_df = pd.DataFrame(keyword_counts, columns=['keyword', 'count']).head(12)
+        fig_kw = px.bar(
+            top_kw_df,
+            x='count',
+            y='keyword',
+            orientation='h',
+            color='count',
+            color_continuous_scale='tealrose',
+            template='plotly_dark'
         )
-        
-        st.markdown(f"**Tổng cộng: {len(df_filtered)} bài viết**")
+        fig_kw.update_layout(height=460, margin=dict(l=0, r=0, t=30, b=0), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+        st.plotly_chart(fig_kw, use_container_width=True)
     else:
-        st.warning("Không có dữ liệu phù hợp với bộ lọc")
-
-# ========== TAB 3: PHÂN TÍCH TỪ KHÓA ==========
-with tab3:
-    st.markdown("### Từ khóa nổi bật")
-    
-    if 'keywords' in df_filtered.columns and len(df_filtered) > 0:
-        # Xử lý từ khóa
-        all_keywords = []
-        for keywords_str in df_filtered['keywords'].dropna():
-            if isinstance(keywords_str, str):
-                all_keywords.extend([k.strip() for k in keywords_str.split(',')])
-        
-        if all_keywords:
-            keyword_counts = pd.Series(all_keywords).value_counts().head(15)
-            
-            fig = go.Figure(data=[
-                go.Bar(
-                    x=keyword_counts.values,
-                    y=keyword_counts.index,
-                    orientation='h',
-                    marker_color='#ff7f0e',
-                    hovertemplate="<b>%{y}</b><br>Xuất hiện: %{x}<extra></extra>"
-                )
-            ])
-            fig.update_layout(
-                height=500,
-                title_text="Top 15 từ khóa nổi bật",
-                xaxis_title="Số lần xuất hiện",
-                yaxis_title="Từ khóa"
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Không có dữ liệu từ khóa")
-    else:
-        st.info("Không có cột từ khóa")
-
-# ========== TAB 4: XU HƯỚNG THEO NGÀY ==========
-with tab4:
-    st.markdown("### Xu hướng công bố bài viết theo ngày")
-    
-    if 'published_date' in df_filtered.columns and len(df_filtered) > 0:
-        daily_counts = df_filtered.groupby('published_date').size().reset_index(name='count')
-        daily_counts = daily_counts.sort_values('published_date')
-        
-        fig = go.Figure(data=[
-            go.Scatter(
-                x=daily_counts['published_date'],
-                y=daily_counts['count'],
-                mode='lines+markers',
-                line=dict(color='#2ca02c', width=3),
-                marker=dict(size=8),
-                hovertemplate="<b>%{x}</b><br>Bài viết: %{y}<extra></extra>"
-            )
-        ])
-        fig.update_layout(
-            height=400,
-            title_text="Số bài viết công bố theo ngày",
-            xaxis_title="Ngày",
-            yaxis_title="Số bài viết",
-            hovermode='x unified'
+        st.info('Không đủ dữ liệu từ khóa để hiển thị.')
+with kw_col2:
+    st.markdown('### Word Cloud')
+    if keyword_counts:
+        cloud_df = pd.DataFrame(keyword_counts[:30], columns=['keyword', 'count'])
+        cloud_df['x'] = np.random.uniform(0, 1, size=len(cloud_df))
+        cloud_df['y'] = np.random.uniform(0, 1, size=len(cloud_df))
+        cloud_df['size'] = cloud_df['count'] / cloud_df['count'].max() * 45 + 10
+        fig_cloud = px.scatter(
+            cloud_df,
+            x='x',
+            y='y',
+            size='size',
+            text='keyword',
+            color='count',
+            color_continuous_scale='teal',
+            template='plotly_dark'
         )
-        st.plotly_chart(fig, use_container_width=True)
+        fig_cloud.update_traces(textposition='middle center', marker=dict(opacity=0.75))
+        fig_cloud.update_layout(height=460, xaxis={'visible': False}, yaxis={'visible': False}, showlegend=False, margin=dict(t=10, b=10, l=10, r=10), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+        st.plotly_chart(fig_cloud, use_container_width=True)
     else:
-        st.info("Không có dữ liệu theo ngày")
+        st.info('Chưa có dữ liệu để tạo word cloud.')
+with kw_col3:
+    st.markdown('### Xu hướng theo ngày')
+    if 'published_date' in filtered.columns and len(filtered) > 0:
+        daily = filtered.groupby('published_date').size().reset_index(name='count')
+        fig_line = px.line(
+            daily,
+            x='published_date',
+            y='count',
+            markers=True,
+            template='plotly_dark',
+            color_discrete_sequence=['cyan']
+        )
+        fig_line.update_layout(height=460, margin=dict(t=30, b=0, l=0, r=0), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+        st.plotly_chart(fig_line, use_container_width=True)
+    else:
+        st.info('Không có dữ liệu xu hướng theo ngày.')
 
-# ========== TAB 5: CHI TIẾT ==========
-with tab5:
-    st.markdown("### Thông tin chi tiết")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("**📊 Số liệu thống kê**")
-        stats = {
-            "Tổng bài viết": len(df_filtered),
-            "Thời gian": f"{df_filtered['published_date'].min()} đến {df_filtered['published_date'].max()}",
-            "Số danh mục": df_filtered['category'].nunique() if 'category' in df_filtered.columns else 0,
-        }
-        for key, value in stats.items():
-            st.metric(label=key, value=value)
-    
-    with col2:
-        st.markdown("**🔝 Top danh mục**")
-        if 'category' in df_filtered.columns and len(df_filtered) > 0:
-            top_cats = df_filtered['category'].value_counts().head(5)
-            for idx, (cat, count) in enumerate(top_cats.items(), 1):
-                st.write(f"{idx}. {cat}: {count} bài viết")
-    
-    st.markdown("---")
-    st.markdown("**ℹ️ Hướng dẫn sử dụng**")
-    st.info("""
-    - 📅 **Bộ lọc ngày**: Chọn khoảng thời gian để xem dữ liệu trong khoảng đó
-    - 🏷️ **Danh mục**: Chọn một hoặc nhiều danh mục để lọc
-    - 🔍 **Tìm kiếm**: Nhập từ khóa để tìm bài viết
-    - 📊 **Biểu đồ**: Xem phân bố dữ liệu dạng hình ảnh
-    - 📋 **Bảng**: Xem chi tiết từng bài viết
-    - 📈 **Xu hướng**: Theo dõi xu hướng qua các ngày
-    """)
+# ========== EVENT DETECTION ==========
+st.markdown('## Event Detection')
+event_cols = st.columns(len(trending_events) or 1)
+for idx, event in enumerate(trending_events):
+    with event_cols[idx]:
+        st.markdown(f"### {event['name']}")
+        st.markdown(f"**Keywords chính:** {event['keywords']}")
+        st.markdown(f"**Số bài liên quan:** {event['count']}")
+        st.markdown(f"**Mức độ bùng nổ:** {event['burst']}%")
+        st.progress(min(event['burst'], 100))
 
-# ========== FOOTER ==========
-st.markdown("---")
-st.markdown(
-    """
-    <div style='text-align: center; color: #888; font-size: 0.9rem;'>
-    📊 News Analytics Dashboard | Cập nhật lần cuối: """ + datetime.now().strftime("%Y-%m-%d %H:%M") + """
-    </div>
-    """,
-    unsafe_allow_html=True
+# ========== TOPIC MODELING ==========
+st.markdown('## Topic Modeling')
+if not topic_df.empty:
+    fig_topic = px.treemap(
+        topic_df,
+        path=['category', 'keyword'],
+        values='count',
+        color='count',
+        color_continuous_scale='tealrose',
+        template='plotly_dark'
+    )
+    fig_topic.update_layout(height=520, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+    st.plotly_chart(fig_topic, use_container_width=True)
+else:
+    st.info('Chưa đủ dữ liệu cho Topic Modeling.')
+
+# ========== NEWS EXPLORER ==========
+st.markdown('## News Explorer')
+keyword_options = [kw for kw, _ in keyword_counts]
+event_options = [event['name'] for event in trending_events]
+selected_keyword = st.selectbox('Chọn từ khóa', options=keyword_options if keyword_options else [''], index=0)
+selected_event = st.selectbox('Chọn sự kiện', options=event_options if event_options else [''], index=0)
+news_filter = pd.DataFrame()
+if selected_event and selected_event != '' and trending_events:
+    oname = selected_event.lower()
+    news_filter = df[df['keywords'].astype(str).str.contains(oname, case=False, na=False)]
+elif selected_keyword and selected_keyword != '':
+    news_filter = df[df['keywords'].astype(str).str.contains(selected_keyword, case=False, na=False)]
+
+if not news_filter.empty:
+    for _, row in news_filter.sort_values('published_date', ascending=False).head(12).iterrows():
+        st.markdown(f"#### [{row['title']}]({row['link']})")
+        st.markdown(f"_{row.get('category', 'Không xác định')} • {row.get('published_date', '')}_")
+        st.markdown(row.get('description', ''))
+        st.markdown('---')
+else:
+    st.info('Chưa có bài viết liên quan cho lựa chọn hiện tại.')
+
+# ========== SENTIMENT ANALYSIS ==========
+st.markdown('## Sentiment Analysis')
+fig_sentiment = px.pie(
+    names=['Positive', 'Neutral', 'Negative'],
+    values=[sentiment_counts['positive'], sentiment_counts['neutral'], sentiment_counts['negative']],
+    color_discrete_sequence=['#2dd4bf', '#94a3b8', '#f87171'],
+    template='plotly_dark'
 )
+fig_sentiment.update_layout(height=420, paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+st.plotly_chart(fig_sentiment, use_container_width=True)
+
+# ========== KEYWORD RELATIONSHIP GRAPH ==========
+st.markdown('## Keyword Relationship Graph')
+if keyword_nodes and keyword_edges:
+    node_positions = {}
+    angle_step = 2 * np.pi / len(keyword_nodes)
+    for i, node in enumerate(keyword_nodes):
+        node_positions[node['id']] = (np.cos(i * angle_step), np.sin(i * angle_step))
+    edge_x = []
+    edge_y = []
+    for edge in keyword_edges:
+        x0, y0 = node_positions[edge['from']]
+        x1, y1 = node_positions[edge['to']]
+        edge_x += [x0, x1, None]
+        edge_y += [y0, y1, None]
+    fig_graph = go.Figure()
+    fig_graph.add_trace(go.Scatter(x=edge_x, y=edge_y, mode='lines', line=dict(color='#26c6da', width=1), hoverinfo='none'))
+    fig_graph.add_trace(go.Scatter(
+        x=[node_positions[node['id']][0] for node in keyword_nodes],
+        y=[node_positions[node['id']][1] for node in keyword_nodes],
+        mode='markers+text',
+        marker=dict(size=[max(8, min(40, node['size'] * 1.5)) for node in keyword_nodes], color='#0aefff'),
+        text=[node['id'] for node in keyword_nodes],
+        textposition='top center',
+        hovertemplate='<b>%{text}</b>',
+    ))
+    fig_graph.update_layout(height=520, xaxis=dict(showgrid=False, zeroline=False, visible=False), yaxis=dict(showgrid=False, zeroline=False, visible=False), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)')
+    st.plotly_chart(fig_graph, use_container_width=True)
+else:
+    st.info('Chưa đủ dữ liệu để xây dựng mối quan hệ từ khóa.')
+
+# ========== LIVE FEED ==========
+st.markdown('## Live Feed')
+if 'published_date' in df.columns:
+    latest = df.sort_values('published_date', ascending=False).head(8)
+else:
+    latest = df.head(8)
+for _, row in latest.iterrows():
+    st.markdown(f"- [{row['title']}]({row['link']}) — _{row.get('category', 'Không xác định')}_")
+st.markdown('---')
+st.markdown('<div style="text-align:center;color:#9fd8ff;">Realtime analytics dashboard - cập nhật tức thời khi dữ liệu có thay đổi.</div>', unsafe_allow_html=True)
