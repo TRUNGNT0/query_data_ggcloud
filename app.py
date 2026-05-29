@@ -58,19 +58,22 @@ def load_data_from_bigquery():
         client = bigquery.Client()
         query = """
             SELECT 
-                link,
                 title,
+                publish_date AS published_date,
+                link,
                 description,
                 category,
-                publish_date AS published_date,
-                view_count,
-                interaction_count
+                clean_keywords
             FROM `project-ceb4f683-ad1a-44e3-8d8.bigdata_project.vnexpress_world_news`
             WHERE publish_date >= CURRENT_DATE() - 90
             ORDER BY publish_date DESC
         """
         df = client.query(query).to_dataframe()
         df['published_date'] = pd.to_datetime(df['published_date']).dt.date
+        # Convert clean_keywords array to comma-separated string
+        df['keywords'] = df['clean_keywords'].apply(
+            lambda x: ', '.join(x) if isinstance(x, list) else str(x)
+        )
         st.session_state.bigquery_error = None
         return df
     except Exception as e:
@@ -81,13 +84,38 @@ def load_data_from_bigquery():
 def load_sample_data():
     """Tải dữ liệu mẫu nếu không có kết nối BigQuery"""
     data = {
-        'title': ['Tin tức 1', 'Tin tức 2', 'Tin tức 3', 'Tin tức 4', 'Tin tức 5'],
-        'category': ['Kinh doanh', 'Thế giới', 'Công nghệ', 'Kinh doanh', 'Thế giới'],
+        'title': [
+            'Quy định mới phủ bóng lên giấc mơ thẻ xanh Mỹ',
+            'Những nhà hàng đặc sản Texas lao đao vì giá thịt tăng phi mã',
+            'Sát thủ bóng đêm của Hezbollah khiến Israel lo ngại',
+            'Ukraine sẽ mua 20 tiêm kích Gripen hiện đại nhất của Thụy Điển',
+            'Tổng Bí thư, Chủ tịch nước Tô Lâm hội kiến Nhà Vua Thái Lan'
+        ],
+        'category': ['Thế giới', 'Thế giới', 'Thế giới', 'Thế giới', 'Thế giới'],
         'published_date': [
             (datetime.now() - timedelta(days=i)).date() for i in range(5)
         ],
-        'view_count': [150, 230, 180, 290, 145],
-        'keywords': ['Tiền tệ', 'Chính trị', 'AI', 'Thị trường', 'Ngoài nước']
+        'keywords': [
+            'Quy định, Mỹ, Thẻ xanh',
+            'Texas, Nhà hàng, Giá thịt',
+            'Hezbollah, Israel, Drone',
+            'Ukraine, Gripen, Thụy Điển',
+            'Tô Lâm, Thái Lan, Hội kiến'
+        ],
+        'description': [
+            'Thay đổi mới trong quy định xin thẻ xanh của Mỹ khiến người nhập cư lo ngại.',
+            'Những nhà hàng nổi tiếng ở Texas đang phải vật lộn vì giá nguyên liệu tăng.',
+            'Quan chức Israel ví drone của Hezbollah như cơn ác mộng.',
+            'Ukraine dự kiến đặt mua 20 tiêm kích Gripen của Thụy Điển.',
+            'Tổng Bí thư hội kiến Nhà Vua Thái Lan trong khuôn khổ chuyến thăm.'
+        ],
+        'link': [
+            'https://vnexpress.net/quy-dinh-moi-1.html',
+            'https://vnexpress.net/nha-hang-texas-2.html',
+            'https://vnexpress.net/hezbollah-3.html',
+            'https://vnexpress.net/ukraine-gripen-4.html',
+            'https://vnexpress.net/to-lam-thai-lan-5.html'
+        ]
     }
     return pd.DataFrame(data)
 
@@ -188,18 +216,24 @@ with col1:
     )
 
 with col2:
-    total_views = df_filtered['view_count'].sum() if 'view_count' in df_filtered.columns else 0
+    num_categories = df_filtered['category'].nunique() if 'category' in df_filtered.columns else 0
     st.metric(
-        label="👁️ Tổng lượt xem",
-        value=f"{total_views:,}",
+        label="🏷️ Danh mục",
+        value=num_categories,
         delta=None
     )
 
 with col3:
-    total_interactions = df_filtered['interaction_count'].sum() if 'interaction_count' in df_filtered.columns else 0
+    num_keywords = 0
+    if 'keywords' in df_filtered.columns and len(df_filtered) > 0:
+        all_kw = []
+        for kw_str in df_filtered['keywords'].dropna():
+            if isinstance(kw_str, str):
+                all_kw.extend([k.strip() for k in kw_str.split(',')])
+        num_keywords = len(set(all_kw))
     st.metric(
-        label="💬 Tương tác",
-        value=f"{total_interactions:,}",
+        label="🔑 Từ khóa độc nhất",
+        value=num_keywords,
         delta=None
     )
 
@@ -241,21 +275,21 @@ with tab1:
             st.info("Không có dữ liệu danh mục")
     
     with col2:
-        if 'view_count' in df_filtered.columns and len(df_filtered) > 0:
-            top_articles = df_filtered.nlargest(10, 'view_count')[['title', 'view_count']]
+        if 'category' in df_filtered.columns and len(df_filtered) > 0:
+            category_counts = df_filtered['category'].value_counts().head(10)
             fig2 = go.Figure(data=[
                 go.Bar(
-                    y=top_articles['title'].str[:30],
-                    x=top_articles['view_count'],
+                    y=category_counts.index,
+                    x=category_counts.values,
                     orientation='h',
-                    marker_color='#1f77b4',
-                    hovertemplate="<b>%{y}</b><br>Lượt xem: %{x:,}<extra></extra>"
+                    marker_color='#ff7f0e',
+                    hovertemplate="<b>%{y}</b><br>Bài viết: %{x}<extra></extra>"
                 )
             ])
             fig2.update_layout(
                 height=400,
-                title_text="Top 10 bài viết nhiều xem nhất",
-                xaxis_title="Lượt xem",
+                title_text="Top 10 danh mục nhiều bài nhất",
+                xaxis_title="Số bài viết",
                 yaxis_title=""
             )
             st.plotly_chart(fig2, use_container_width=True)
@@ -264,12 +298,12 @@ with tab1:
 with tab2:
     st.markdown("### Danh sách chi tiết bài viết")
     
-    display_columns = [col for col in ['title', 'category', 'published_date', 'view_count'] 
+    display_columns = [col for col in ['title', 'category', 'published_date', 'description'] 
                        if col in df_filtered.columns]
     
     if len(df_filtered) > 0:
         display_df = df_filtered[display_columns].copy()
-        display_df.columns = ['Tiêu đề', 'Danh mục', 'Ngày đăng', 'Lượt xem']
+        display_df.columns = ['Tiêu đề', 'Danh mục', 'Ngày đăng', 'Mô tả']
         
         st.dataframe(
             display_df,
@@ -279,7 +313,7 @@ with tab2:
                 "Tiêu đề": st.column_config.TextColumn(width="large"),
                 "Danh mục": st.column_config.TextColumn(width="small"),
                 "Ngày đăng": st.column_config.DateColumn(width="small"),
-                "Lượt xem": st.column_config.NumberColumn(width="small", format="%d")
+                "Mô tả": st.column_config.TextColumn(width="medium")
             }
         )
         
